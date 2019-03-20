@@ -21,7 +21,6 @@ import threading
 import re
 import requests
 import warnings
-import inspect
 warnings.filterwarnings("ignore")
 
 
@@ -254,8 +253,7 @@ def visit_generic(generic_instantiation, new_prop, type_dict, structure_svc, enu
         new_prop['type'] = 'array'
         new_prop['items'] = new_type
         if '$ref' in new_prop:
-            pass
-            # del new_prop['$ref']
+            del new_prop['$ref']
 
 
 def is_type_builtin(type_):
@@ -293,7 +291,7 @@ def process_structure_info(type_name, structure_info, type_dict, structure_svc, 
 
 def process_enum_info(type_name, enum_info, type_dict):
     enum_type = {'type': 'string', 'description': enum_info['documentation']}
-    enum_type.setdefault('enum', [value.value for value in enum_info['values']])
+    enum_type.setdefault('enum', [value['value'] for value in enum_info['values']])
     type_dict[type_name] = enum_type
 
 
@@ -367,7 +365,7 @@ def convert_field_info_to_swagger_parameter(param_type, input_parameter_obj, typ
     if '$ref' in parameter_obj:
         schema_obj = {'$ref': parameter_obj['$ref']}
         parameter_obj['schema'] = schema_obj
-        # del parameter_obj['$ref']
+        del parameter_obj['$ref']
     return parameter_obj
 
 
@@ -494,16 +492,13 @@ def cleanup(path_dict, type_dict):
             properties = type_object['properties']
             for _, property_value in six.iteritems(properties):
                 if 'required' in property_value and isinstance(property_value['required'], bool):
-                    # del property_value['required']
-                    pass
+                    del property_value['required']
     for _, path_value in six.iteritems(path_dict):
         for _, method_value in six.iteritems(path_value):
             if 'path' in method_value:
-                pass
-                # del method_value['path']
+                del method_value['path']
             if 'method' in method_value:
-                pass
-                # del method_value['method']
+                del method_value['method']
 
 
 def remove_com_vmware_from_dict(swagger_obj, depth=0, keys_list=[]):
@@ -522,8 +517,7 @@ def remove_com_vmware_from_dict(swagger_obj, depth=0, keys_list=[]):
     """
     if isinstance(swagger_obj, dict):
         if '$ref' in swagger_obj and 'required' in swagger_obj:
-            pass
-            # del swagger_obj['required']
+            del swagger_obj['required']
         for key, item in swagger_obj.items():
             if isinstance(item, str):
                 if key in ('$ref', 'summary', 'description'):
@@ -829,8 +823,7 @@ def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_sv
                             type_ref = type_dict[ref]
                             prop['items'] = type_ref
                             if 'description' in prop['items']:
-                                pass
-                                # del prop['items']['description']
+                                del prop['items']['description']
                     if 'description' in property_value:
                         prop['description'] = property_value['description']
                 elif '$ref' in property_value:
@@ -1203,7 +1196,8 @@ def objectTodict(obj):
     elif objtype is dict:
         temp = {}
         for key, value in obj.items():
-            temp.update({key:objectTodict(value)})
+            temp[key] = objectTodict(value)
+
         obj = temp
     elif objtype is list:
         temp = []
@@ -1211,19 +1205,19 @@ def objectTodict(obj):
             temp.append(objectTodict(value))
         obj = temp
     else:
-        obj = objectTodict(obj.__dict__)
+        if obj.__dict__ != {}:
+            obj = objectTodict(obj.__dict__)
+        
     return obj
 
 
 def populate_dicts(component_svc, enumeration_dict, structure_dict, service_dict, service_urls_map, base_url):
     components = component_svc.list()
-    print(components)
     for component in components:
         component_data = objectTodict(component_svc.get(component))
         component_packages = component_data['info']['packages']
         for package in component_packages.keys():
             package_info = component_packages.get(package)
-
             for enumeration, enumeration_info in package_info['enumerations'].items():
                 enumeration_dict[enumeration] = enumeration_info
             for structure, structure_info in package_info['structures'].items():
@@ -1273,14 +1267,15 @@ def main():
 
     threads = []
     for package, service_urls in six.iteritems(package_dict):
-        worker = threading.Thread(target=process_service_urls, args=(
-            package, service_urls, output_dir, structure_dict, enumeration_dict, service_dict, service_urls_map
-            , error_map, rest_navigation_url))
-        worker.daemon = True
-        worker.start()
-        threads.append(worker)
-    for worker in threads:
-        worker.join()
+        if package == 'cis':
+            worker = threading.Thread(target=process_service_urls, args=(
+                package, service_urls, output_dir, structure_dict, enumeration_dict, service_dict, service_urls_map
+                , error_map, rest_navigation_url))
+            worker.daemon = True
+            worker.start()
+            threads.append(worker)
+        for worker in threads:
+            worker.join()
 
     # api.json contains list of packages which is used by UI to dynamically populate dropdown.
     api_files = {'files': list(package_dict.keys())}
