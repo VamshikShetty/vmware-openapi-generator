@@ -19,7 +19,7 @@ import requests
 import warnings
 
 from lib.metamodel_collect import populate_dicts, get_service_urls_from_rest_navigation, categorize_service_urls_by_package_names
-from lib.metamodel2swagger import process_service_urls
+from lib.metamodel2openapi import process_service_urls
 from lib.utils import write_json_data_to_file
 
 warnings.filterwarnings("ignore")
