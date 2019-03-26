@@ -4,7 +4,7 @@ from .type_handler import visit_type_category
 import six
 
 class paramsHandler():
-    def __init__(self, url, method_type, service_name, operation_name, params_metadata, type_dict, structure_svc, enum_svc):
+    def __init__(self, url, method_type, service_name, operation_name, params_metadata, type_dict, structure_svc, enum_svc, spec):
 
         self.url = url
         self.method_type = method_type
@@ -14,9 +14,15 @@ class paramsHandler():
         self.type_dict = type_dict
         self.structure_svc = structure_svc
         self.enum_svc = enum_svc
-
+        self.spec = spec
         self.params_array = []
 
+        self.request_body = None
+
+        if self.spec == '2':
+            self.ref_path = "#/definitions/"
+        elif self.spec =='3':
+            self.ref_path = "#/components/schemas/"
         
         path_param_list, other_params, self.url = self.extract_path_parameters()
         for field_info in path_param_list:
@@ -27,9 +33,13 @@ class paramsHandler():
             # Handles http post/put/patch request.
             # todo: handle query, formData and header parameters
             if other_params:
+                
                 param = self.wrap_body_params(service_name, operation_name, other_params)
                 if param is not None:
-                    self.params_array.append(param)
+                    if self.spec == '2':
+                        self.params_array.append(param)
+                    elif self.spec == '3':
+                        self.request_body = param
         
         elif self.method_type == 'get':
             for field_info in other_params:
@@ -47,7 +57,7 @@ class paramsHandler():
         Converts metamodel fieldinfo to swagger parameter.
         """
         param = {}
-        visit_type_category(field_info['type'], param, self.type_dict, self.structure_svc, self.enum_svc)
+        visit_type_category(field_info['type'], param, self.type_dict, self.structure_svc, self.enum_svc, self.ref_path)
 
         if 'required' not in param:
             param['required'] = True
@@ -61,6 +71,12 @@ class paramsHandler():
             schema_obj = {'$ref': param['$ref']}
             param['schema'] = schema_obj
             del param['$ref']
+
+        if self.spec == '3' and 'type' in param:
+            temp_schema = { 'type': param['type']}
+            param['schema'] = temp_schema
+            del param['type']
+
         return param
 
     def extract_path_parameters(self):
@@ -131,60 +147,111 @@ class paramsHandler():
         """
         prop_array = []
         parameter_obj = {}
-        visit_type_category(query_param_info['type'], parameter_obj, self.type_dict, self.structure_svc, self.enum_svc)
+
+        visit_type_category(query_param_info['type'], parameter_obj, self.type_dict, self.structure_svc, self.enum_svc, self.ref_path)
         if '$ref' in parameter_obj:
-            reference = parameter_obj['$ref'].replace('#/definitions/', '')
+            reference = parameter_obj['$ref'].replace( self.ref_path, '')
             type_ref = self.type_dict.get(reference, None)
+
             if type_ref is None:
                 return None
+      
             if 'properties' in type_ref:
                 for property_name, property_value in six.iteritems(type_ref['properties']):
+
                     prop = {'in': 'query', 'name': query_param_info['name'] + '.' + property_name}
+                    
+                    if self.spec == '3':
+                        prop['schema'] = {}
+                    
                     if 'type' in property_value:
-                        prop['type'] = property_value['type']
-                        if prop['type'] == 'array':
-                            prop['collectionFormat'] = 'multi'
-                            prop['items'] = property_value['items']
+
+                        if self.spec == '2':
+                            prop['type'] = property_value['type']
+                        elif self.spec == '3':
+                            prop['schema']['type'] = property_value['type']
+
+                        if property_value['type'] == 'array':
+
+                            ## spec 2 detail
+                            if self.spec == '2':
+                                prop['collectionFormat'] = 'multi'
+                                prop['items'] = property_value['items']
+                            elif self.spec == '3':
+                                prop['schema']['items'] = property_value['items']
+
                             if '$ref' in property_value['items']:
-                                ref = property_value['items']['$ref'].replace('#/definitions/', '')
+                                ref = property_value['items']['$ref'].replace(self.ref_path, '')
                                 type_ref = self.type_dict[ref]
-                                prop['items'] = type_ref
-                                if 'description' in prop['items']:
-                                    del prop['items']['description']
+
+                                if self.spec == '2':
+                                    prop['items'] = type_ref
+                                    if 'description' in prop['items']:
+                                        del prop['items']['description']
+                                elif self.spec == '3':
+                                    prop['schema']['items'] = type_ref
+                                    if 'description' in prop['schema']['items']:
+                                        del prop['schema']['items']['description']
+                                
                         if 'description' in property_value:
                             prop['description'] = property_value['description']
+
                     elif '$ref' in property_value:
-                        reference = property_value['$ref'].replace('#/definitions/', '')
+                        reference = property_value['$ref'].replace( self.ref_path , '')
                         prop_obj = self.type_dict[reference]
-                        if 'type' in prop_obj:
-                            prop['type'] = prop_obj['type']
-                        if 'enum' in prop_obj:
-                            prop['enum'] = prop_obj['enum']
-                        if 'description' in prop_obj:
-                            prop['description'] = prop_obj['description']
+
+                        if self.spec == '2':
+                            if 'type' in prop_obj:
+                                prop['type'] = prop_obj['type']
+                            if 'enum' in prop_obj:
+                                prop['enum'] = prop_obj['enum']
+                            if 'description' in prop_obj:
+                                prop['description'] = prop_obj['description']
+                        elif self.spec == '3':
+                            prop['schema'] = prop_obj
+
+
                     if 'required' in type_ref:
                         if property_name in type_ref['required']:
                             prop['required'] = True
                         else:
                             prop['required'] = False
+
                     prop_array.append(prop)
             else:
-                prop = {'in': 'query', 'name': query_param_info['name'], 'description': type_ref['description'],
-                        'type': type_ref['type']}
-                if 'enum' in type_ref:
-                    prop['enum'] = type_ref['enum']
-                if 'required' not in parameter_obj:
-                    prop['required'] = True
-                else:
-                    prop['required'] = parameter_obj['required']
+
+                if self.spec == '2':
+
+                    prop = {'in': 'query', 'name': query_param_info['name'], 'description': type_ref['description'],
+                            'type': type_ref['type']}
+                    if 'enum' in type_ref:
+                        prop['enum'] = type_ref['enum']
+                    if 'required' not in parameter_obj:
+                        prop['required'] = True
+                    else:
+                        prop['required'] = parameter_obj['required']
+
+                elif self.spec == '3':
+
+                    prop = {'in': 'query', 'name': query_param_info['name'], 'description': type_ref['description'],
+                            'schema': type_ref}
+
                 prop_array.append(prop)
+
         else:
             parameter_obj['in'] = 'query'
             parameter_obj['name'] = query_param_info['name']
             parameter_obj['description'] = query_param_info['documentation']
             if 'required' not in parameter_obj:
                 parameter_obj['required'] = True
+            
+
+            if self.spec == '3':
+                parameter_obj['schema'] = { "type": parameter_obj['type'] }
+                del parameter_obj['type']
+            
             prop_array.append(parameter_obj)
+
         return prop_array
 
     def wrap_body_params(self, service_name, operation_name, body_param_list):
@@ -207,7 +274,7 @@ class paramsHandler():
         # name_array = [] ##### WHY do we need it ?
         for param in body_param_list:
             parameter_obj = {}
-            visit_type_category(param['type'], parameter_obj, self.type_dict, self.structure_svc, self.enum_svc)
+            visit_type_category(param['type'], parameter_obj, self.type_dict, self.structure_svc, self.enum_svc, self.ref_path)
             # name_array.append(param['name'])
             parameter_obj['description'] = param['documentation']
             properties_obj[param['name']] = parameter_obj
@@ -218,16 +285,40 @@ class paramsHandler():
                 if parameter_obj['required'] == True:
                     required.append(param['name'])
 
-        parameter_obj = {'in': 'body', 'name': 'request_body'}
-        if len(required) > 0:
-            body_obj['required'] = required
-            parameter_obj['required'] = True
+        if self.spec == '2':
 
-        self.type_dict[wrapper_name] = body_obj
+            _obj = {'in': 'body', 'name': 'request_body'}
+            if len(required) > 0:
+                body_obj['required'] = required
+                _obj['required'] = True
 
-        schema_obj = {'$ref': '#/definitions/' + wrapper_name}
-        parameter_obj['schema'] = schema_obj
-        return parameter_obj
+            self.type_dict[wrapper_name] = body_obj
+
+            schema_obj = {'$ref': self.ref_path + wrapper_name}
+            _obj['schema'] = schema_obj
+
+        elif self.spec == '3':
+
+            if 'requestBodies' not in self.type_dict:
+                self.type_dict['requestBodies'] = {}
+
+            self.type_dict['requestBodies'][wrapper_name] = {
+                'content':{
+                    'application/json':{
+                        'schema':{
+                            '$ref': self.ref_path + wrapper_name
+                        }
+                    }
+                }
+            }
+            self.type_dict[wrapper_name] = body_obj
+            # _obj = {}
+            # schema_obj = {'$ref': self.ref_path + wrapper_name}
+            # _obj['schema'] = schema_obj
+
+            _obj = { '$ref': "#/components/requestBodies/" + wrapper_name}
+            
+        return _obj
 
 def is_param_path_variable(param, path_param_placeholder):
     if param['name'] == path_param_placeholder:

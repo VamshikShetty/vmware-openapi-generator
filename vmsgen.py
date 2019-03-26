@@ -32,6 +32,7 @@ for apis available on vcenter.
 
 GENERATE_UNIQUE_OP_IDS = False
 TAG_SEPARATOR = '/'
+SPECIFICATION = '2'
 
 
 def get_input_params():
@@ -46,31 +47,44 @@ def get_input_params():
                                               ' to calculate metadata-url and rest-navigation-url')
     parser.add_argument('-o', '--output', help='Output directory of swagger files. if not specified,'
                                                ' current working directory is chosen as output directory')
+    parser.add_argument('-oas', '--oas', default='2', help='opeanpi spec version')
     parser.add_argument('-s', '--tag-separator', default='/', help='Separator to use in tag name')
     parser.add_argument('-k', '--insecure', action='store_true', help='Bypass SSL certificate validation')
     parser.add_argument("-uo", "--unique-operation-ids", required=False, nargs='?', const=True, default=False,
                         help="Pass this parameter to generate Unique Operation Ids.")
     args = parser.parse_args()
+    
     metadata_url = args.metadata_url
     rest_navigation_url = args.rest_navigation_url
+    
     vcip = args.vcip
     if vcip is not None:
         if metadata_url is None:
             metadata_url = 'https://%s/api' % vcip
         if rest_navigation_url is None:
             rest_navigation_url = 'https://%s/rest' % vcip
+    
     if metadata_url is None or rest_navigation_url is None:
         raise ValueError('metadataUrl and restNavigationUrl are required parameters')
+    
     metadata_url = metadata_url.rstrip('/')
     rest_navigation_url = rest_navigation_url.rstrip('/')
     output_dir = args.output
     if output_dir is None:
         output_dir = os.getcwd()
+
     verify = not args.insecure
+    
     global GENERATE_UNIQUE_OP_IDS
     GENERATE_UNIQUE_OP_IDS = args.unique_operation_ids
+    
     global TAG_SEPARATOR
     TAG_SEPARATOR = args.tag_separator
+    
+    global SPECIFICATION
+    SPECIFICATION = args.oas
+    if SPECIFICATION not in ['2', '3']:
+        raise Exception(" Input Valid Specification ")
     return metadata_url, rest_navigation_url, output_dir, verify
 
 def main():
@@ -103,9 +117,12 @@ def main():
 
     global GENERATE_UNIQUE_OP_IDS
     global TAG_SEPARATOR
+    global SPECIFICATION
+
     threads = []
     for package, service_urls in six.iteritems(package_dict):
         print('processing package ' + package)
+        # if package == 'content':
         worker = threading.Thread(
             target=process_service_urls, 
             args=(
@@ -118,7 +135,9 @@ def main():
                 service_urls_map, 
                 rest_navigation_url,
                 GENERATE_UNIQUE_OP_IDS,
-                TAG_SEPARATOR)
+                TAG_SEPARATOR,
+                SPECIFICATION
+            )
         )
         worker.daemon = True
         worker.start()

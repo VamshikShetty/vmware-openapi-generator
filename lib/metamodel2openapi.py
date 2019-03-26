@@ -13,7 +13,7 @@ def contains_rm_annotation(service_info):
             return False
     return True
 
-def get_path(operation_info, http_method, url, service_name, type_dict, structure_dict, enum_dict, operation_id, error_map, tag_separator):
+def get_path(operation_info, http_method, url, service_name, type_dict, structure_dict, enum_dict, operation_id, error_map, tag_separator, spec):
     
     documentation = operation_info['documentation']
     params = operation_info['params']
@@ -22,22 +22,21 @@ def get_path(operation_info, http_method, url, service_name, type_dict, structur
     http_method = http_method.lower()
 
     # find consume
-    if http_method in ('get', 'delete'):
-        consumes =  None
-    else:
+    consumes =  None
+    if http_method not in ('get', 'delete') and spec == '2':
         consumes =  ['application/json']
 
     produces = None
 
     phandler = paramsHandler(url, http_method, service_name,
                                             operation_id, params, type_dict,
-                                            structure_dict, enum_dict)
+                                            structure_dict, enum_dict, spec)
     
-    param_array, url = phandler.params_array, phandler.url
+    param_array, url, request_body = phandler.params_array, phandler.url, phandler.request_body
 
     responses = populate_response_map(output,
                                          errors,
-                                         error_map, type_dict, structure_dict, enum_dict, service_name, operation_id)
+                                         error_map, type_dict, structure_dict, enum_dict, service_name, operation_id, spec)
 
     path_obj = {}
 
@@ -50,6 +49,8 @@ def get_path(operation_info, http_method, url, service_name, type_dict, structur
         path_obj['summary'] = documentation
     if param_array is not None:
         path_obj['parameters'] = param_array
+    if request_body is not None:
+        path_obj['requestBody'] = request_body
     if responses is not None:
         path_obj['responses'] = responses
     if consumes is not None:
@@ -60,9 +61,16 @@ def get_path(operation_info, http_method, url, service_name, type_dict, structur
         path_obj['operationId'] = operation_id
     
     if path_obj['path'] == '/com/vmware/cis/session' and path_obj['method'] == 'post':
-        header_parameter = {'in': 'header', 'required': True, 'type': 'string',
+        header_parameter = {'in': 'header', 'required': True,
                             'name': 'vmware-use-header-authn',
                             'description': 'Custom header to protect against CSRF attacks in browser based clients'}
+        
+        if spec == '2':
+            header_parameter['type'] = 'string'
+            path_obj['security'] = [{'basic_auth': []}]
+        elif spec == '3':
+            header_parameter['schema'] = { 'type' : 'string' }
+
         path_obj['parameters'] = [header_parameter]
 
     return path_obj
@@ -98,7 +106,7 @@ def find_url(list_of_links):
     return non_action_link['href'], non_action_link['method']
 
 def process_service_urls(package_name, service_urls, output_dir, structure_dict, enum_dict,
-                         service_dict, service_url_dict, base_url, generate_unique_op_ids, tag_separator):
+                         service_dict, service_url_dict, base_url, generate_unique_op_ids, tag_separator, spec):
 
     type_dict = {}
     path_list = []
@@ -118,7 +126,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
                 operation_info = service_info['operations'].get(operation_id)
 
                 path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
-                                operation_id, error_map, tag_separator)
+                                operation_id, error_map, tag_separator, spec)
                 path_list.append(path)
             continue
 
@@ -154,7 +162,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
 
             operation_info = service_info['operations'].get(operation_id)
             path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
-                            operation_id, error_map, tag_separator)
+                            operation_id, error_map, tag_separator, spec)
             path_list.append(path)
 
     # The same path can have multiple methods.
@@ -172,7 +180,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
             x[path['method']] = path
 
     cleanup(path_dict=path_dict, type_dict=type_dict)
-    process_output(path_dict, type_dict, output_dir, package_name, generate_unique_op_ids)
+    process_output(path_dict, type_dict, output_dir, package_name, generate_unique_op_ids, spec)
 
 def find_url_method(opinfo):
     """
@@ -212,22 +220,43 @@ def cleanup(path_dict, type_dict):
             if 'method' in method_value:
                 del method_value['method']
 
-def process_output(path_dict, type_dict, output_dir, output_filename, generate_unique_op_ids):
+def process_output(path_dict, type_dict, output_dir, output_filename, generate_unique_op_ids, spec):
     description_map = load_description()
     remove_com_vmware_from_dict(path_dict)
     if generate_unique_op_ids:
         create_unique_op_ids(path_dict)
-    remove_query_params(path_dict)
+    remove_query_params(path_dict, spec)
     remove_com_vmware_from_dict(type_dict)
-    swagger_template = {'swagger': '2.0',
-                        'info': {'description': description_map.get(output_filename, ''),
-                                 'title': output_filename,
-                                 'termsOfService': 'http://swagger.io/terms/',
-                                 'version': '2.0.0'}, 'host': '<vcenter>',
-                        'basePath': '/rest', 'tags': [],
-                        'schemes': ['https', 'http'],
-                        'paths': collections.OrderedDict(sorted(path_dict.items())),
-                        'definitions': collections.OrderedDict(sorted(type_dict.items()))}
+    if spec == '2':
+        swagger_template = {'swagger': '2.0',
+                            'info': {'description': description_map.get(output_filename, ''),
+                                    'title': output_filename,
+                                    'termsOfService': 'http://swagger.io/terms/',
+                                    'version': '2.0.0'}, 
+                            'host': '<vcenter>',
+                            'securityDefinitions': {'basic_auth': {'type': 'basic'}},
+                            'basePath': '/rest', 'tags': [],
+                            'schemes': ['https', 'http'],
+                            'paths': collections.OrderedDict(sorted(path_dict.items())),
+                            'definitions': collections.OrderedDict(sorted(type_dict.items()))
+                            }
+    elif spec == '3':
+        remove_com_vmware_from_dict(type_dict['requestBodies'])
+        swagger_template = {'openapi': '3.0.0',
+                            'info': {'description': description_map.get(output_filename, ''),
+                                    'title': output_filename,
+                                    'termsOfService': 'http://swagger.io/terms/',
+                                    'version': '2.0.0'},
+                            'paths': collections.OrderedDict(sorted(path_dict.items())),
+                            'components': {
+                                'requestBodies': collections.OrderedDict(sorted(type_dict['requestBodies'].items()))
+                                 #,
+                                # 'securitySchemes':{'basic_auth': {'type': 'basic'}}
+                            }
+                        }
+        del type_dict['requestBodies']
+        swagger_template['components']['schemas'] = collections.OrderedDict(sorted(type_dict.items()))
+
     write_json_data_to_file(output_dir + os.path.sep + output_filename + '.json', swagger_template)
 
 def create_unique_op_ids(path_dict):
@@ -295,7 +324,7 @@ def remove_com_vmware_from_dict(swagger_obj, depth=0, keys_list=[]):
             except KeyError:
                 print('Could not find the Swagger Element :  {}'.format(old_key))
 
-def remove_query_params(path_dict):
+def remove_query_params(path_dict, spec):
     """
     Swagger/Open API specification prohibits appending query parameter to the request mapping path.
 
@@ -351,8 +380,21 @@ def remove_query_params(path_dict):
             new_path = paths_array[0]
             query_parameters = paths_array[1]
             key_value = query_parameters.split('=')
-            q_param = {'name': key_value[0], 'in': 'query', 'description': key_value[0] + '=' + key_value[1],
-                       'required': True, 'type': 'string', 'enum': [key_value[1]]}
+
+            q_param = {'name': key_value[0], 
+                        'in': 'query', 
+                        'description': key_value[0] + '=' + key_value[1],
+                        'required': True
+                        }
+
+            if spec == '2':
+                q_param['type'] = 'string'
+                q_param['enum'] = [key_value[1]]
+            elif spec == '3':
+                q_param['schema'] = {}
+                q_param['schema']['type'] = 'string'
+                q_param['schema']['enum'] = [key_value[1]]
+
             if new_path in path_dict:
                 new_path_operations = path_dict[new_path].keys()
                 path_operations = http_operations.keys()
@@ -371,3 +413,52 @@ def remove_query_params(path_dict):
                 path_dict[new_path] = path_dict.pop(old_path)
     for path in paths_to_delete:
         del path_dict[path]
+
+def create_camelized_op_id(path, http_method, operations_dict):
+    """
+    Creates camelized operation id.
+    Takes the path, http_method and operation dictionary as input parameter:
+    1. Iterates through all the operation array to return the current operation id
+    2. Appends path to the existing operation id and
+     replaces '/' and '-' with '_' and removes 'com_vmware_'
+    3. Splits the string by '_'
+    4. Converts the first letter of all the words except the first one from lower to upper
+    5. Joins all the words together and returns the new camelcase string
+    e.g
+        parameter : abc_def_ghi
+        return    : AbcDefGhi
+    :param path:
+    :param http_method:
+    :param operations_dict:
+    :return: new_op_id
+    """
+    curr_op_id = operations_dict['operationId']
+    raw_op_id = curr_op_id.replace('-', '_')
+    new_op_id = raw_op_id
+    if '_' in raw_op_id:
+        raw_op_id_iter = iter(raw_op_id.split('_'))
+        new_op_id = next(raw_op_id_iter)
+        for new_op_id_element in raw_op_id_iter:
+            new_op_id += new_op_id_element.title()
+    ''' 
+        Removes query parameters form the path. 
+        Only path elements are used in operation ids
+    '''
+    paths_array = re.split('\?', path)
+    path = paths_array[0]
+    path_elements = path.replace('-', '_').split('/')
+    path_elements_iter = iter(path_elements)
+    for path_element in path_elements_iter:
+        if '{' in path_element:
+            continue
+        if 'com' == path_element or 'vmware' == path_element:
+            continue
+        if path_element.lower() == raw_op_id.lower():
+            continue
+        if '_' in path_element:
+            sub_path_iter = iter(path_element.split('_'))
+            for sub_path_element in sub_path_iter:
+                new_op_id += sub_path_element.title()
+        else:
+            new_op_id += path_element.title()
+    return new_op_id
