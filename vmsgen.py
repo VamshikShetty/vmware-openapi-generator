@@ -5,12 +5,15 @@
 
 # pylint: disable=C0111, E1121, R0913, R0914, R0911, W0703, E1101, C0301, W0511,C0413
 from __future__ import print_function
-import six
 from six.moves import http_client
 
+from vmware.vapi.lib.constants import SHOW_UNRELEASED_APIS
+from vmware.vapi.core import ApplicationContext
 from vmware.vapi.lib.connect import get_requests_connector
 from vmware.vapi.stdlib.client.factories import StubConfigurationFactory
 from com.vmware.vapi.metadata import metamodel_client
+
+import six
 import sys
 import os
 import argparse
@@ -34,6 +37,7 @@ for apis available on vcenter.
 '''
 
 GENERATE_UNIQUE_OP_IDS = False
+GENERATE_METAMODEL = False
 API_SERVER_HOST = '<vcenter>'
 TAG_SEPARATOR = '/'
 
@@ -88,7 +92,7 @@ def write_json_data_to_file(file_name, json_data):
     Utility method used to write json file.
     """
     with open(file_name, 'w+') as outfile:
-        json.dump(json_data, outfile, indent=4)
+        json.dump(json_data, outfile, indent=4, sort_keys=True)
 
 
 def get_json(url, verify=True):
@@ -117,7 +121,7 @@ def get_all_services_urls(components_urls, verify=True):
     for url in components_urls:
         services = get_json(url, verify)
         for service in services:
-            service_url_dict[service['href']] = service['name']
+            service_url_dict[service['href']] = (service['name'], '/rest')
     return service_url_dict
 
 
@@ -733,7 +737,7 @@ def remove_query_params(path_dict):
         del path_dict[path]
 
 
-def process_output(path_dict, type_dict, output_dir, output_filename):
+def process_output(path_dict, type_dict, output_dir, output_filename, service_end_point):
     description_map = load_description()
     remove_com_vmware_from_dict(path_dict)
     global GENERATE_UNIQUE_OP_IDS
@@ -745,13 +749,17 @@ def process_output(path_dict, type_dict, output_dir, output_filename):
                         'info': {'description': description_map.get(output_filename, ''),
                                  'title': output_filename,
                                  'termsOfService': 'http://swagger.io/terms/',
-                                 'version': '2.0.0'}, 'host': API_SERVER_HOST,
+                                 'version': '2.0.0'}, 'host': '<vcenter>',
                         'securityDefinitions': {'basic_auth': {'type': 'basic'}},
-                        'basePath': '/rest', 'tags': [],
+                        'basePath': service_end_point, 'tags': [],
                         'schemes': ['https', 'http'],
                         'paths': collections.OrderedDict(sorted(path_dict.items())),
                         'definitions': collections.OrderedDict(sorted(type_dict.items()))}
-    write_json_data_to_file(output_dir + os.path.sep + output_filename + '.json', swagger_template)
+    
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
+    write_json_data_to_file(output_dir + os.path.sep + service_end_point + "_" + output_filename + '.json', swagger_template)
 
 
 def find_consumes(method_type):
@@ -1067,6 +1075,11 @@ def get_path(operation_info, http_method, url, service_name, type_dict, structur
                       consumes=consumes_json, produces=produces)
     return path
 
+def api_get_url_and_method(metadata):
+    for method in metadata.keys():
+        if method in ['POST', 'GET', 'DELETE', 'PUT', 'PATCH']: 
+            url_path = metadata[method].elements["path"].string_value
+            return method, url_path
 
 def process_service_urls(package_name, service_urls, output_dir, structure_dict, enum_dict,
                          service_dict, service_url_dict, error_map, base_url):
@@ -1075,11 +1088,30 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
     type_dict = {}
     path_list = []
     for service_url in service_urls:
-        service_name = service_url_dict.get(service_url, None)
+
+        service_name, service_end_point = service_url_dict.get(service_url, None)
         service_info = service_dict.get(service_name, None)
         if service_info is None:
             continue
 
+        ## Processing for /api end point
+        if service_end_point == '/api':
+            
+            for operation_id, operation_info in service_info.operations.items():
+                method, url = api_get_url_and_method(operation_info.metadata)
+
+                # check for query parameters
+                if 'params' in operation_info.metadata[method].elements:
+                    element_value = operation_info.metadata[method].elements['params']
+                    params="&".join(element_value.list_value)
+                    url = url + '?' + params
+
+                path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
+                                operation_id, error_map)
+                path_list.append(path)
+            continue
+
+        ## Processing for /rest end point
         if contains_rm_annotation(service_info):
             for operation in service_info.operations.values():
                 url, method = find_url_method(operation)
@@ -1115,14 +1147,14 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
             if operation_id not in service_info.operations:
                 continue
             url, method = find_url(service_operation['links'])
-            url = get_service_path_from_service_url(url, base_url)
+            url = get_service_path_from_service_url(url, base_url + service_end_point)
             operation_info = service_info.operations.get(operation_id)
             path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
                             operation_id, error_map)
             path_list.append(path)
     path_dict = convert_path_list_to_path_map(path_list)
     cleanup(path_dict=path_dict, type_dict=type_dict)
-    process_output(path_dict, type_dict, output_dir, package_name)
+    process_output(path_dict, type_dict, output_dir, package_name, service_end_point)
 
 
 def get_input_params():
@@ -1141,6 +1173,8 @@ def get_input_params():
     parser.add_argument('-k', '--insecure', action='store_true', help='Bypass SSL certificate validation')
     parser.add_argument("-uo", "--unique-operation-ids", required=False, nargs='?', const=True, default=False,
                         help="Pass this parameter to generate Unique Operation Ids.")
+    parser.add_argument("-c", "--metamodel-components", required=False, nargs='?', const=True, default=False,
+                        help="Pass this parameter to save each metamodel component as a new json file")
     parser.add_argument('--host', help='Domain name or IP address (IPv4) of the host that serves the API. '
                                              'Default value is "<vcenter>"')
     args = parser.parse_args()
@@ -1157,9 +1191,6 @@ def get_input_params():
     metadata_url = metadata_url.rstrip('/')
     rest_navigation_url = rest_navigation_url.rstrip('/')
     output_dir = args.output
-    if args.host is not None:
-        global API_SERVER_HOST
-        API_SERVER_HOST = args.host
     if output_dir is None:
         output_dir = os.getcwd()
     verify = not args.insecure
@@ -1167,7 +1198,9 @@ def get_input_params():
     GENERATE_UNIQUE_OP_IDS = args.unique_operation_ids
     global TAG_SEPARATOR
     TAG_SEPARATOR = args.tag_separator
-    return metadata_url, rest_navigation_url, output_dir, verify
+    global GENERATE_METAMODEL
+    GENERATE_METAMODEL = args.metamodel_components
+    return 'https://%s' % vcip, metadata_url, rest_navigation_url, output_dir, verify
 
 
 def get_component_service(connector):
@@ -1228,11 +1261,36 @@ def find_url_method(opinfo):
         url = url + '?' + params
     return url, method
 
+def objectTodict(obj):
+    objtype = type(obj)
+    if objtype is int or objtype is str or objtype is float or objtype == type(None) or objtype is bool:
+        pass
+    elif objtype is dict:
+        temp = {}
+        for key, value in obj.items():
+            temp[key] = objectTodict(value)
+
+        obj = temp
+    elif objtype is list:
+        temp = []
+        for value in obj:
+            temp.append(objectTodict(value))
+        obj = temp
+    else:
+        if obj.__dict__ != {}:
+            obj = objectTodict(obj.__dict__)
+        
+    return obj
 
 def populate_dicts(component_svc, enumeration_dict, structure_dict, service_dict, service_urls_map, base_url):
     components = component_svc.list()
     for component in components:
         component_data = component_svc.get(component)
+        global GENERATE_METAMODEL
+        if GENERATE_METAMODEL:
+            if not os.path.exists('metamodel'):
+                os.mkdir('metamodel')
+            write_json_data_to_file('metamodel/'+component+'.json', objectTodict(component_data))
         component_packages = component_data.info.packages
         for package in component_packages:
             package_info = component_packages.get(package)
@@ -1258,9 +1316,38 @@ def get_service_url_from_service_id(base_url, service_id):
     return base_url + '/' + replaced_string.replace('_', '-')
 
 
+def add_service_urls_using_metamodel(service_urls_map, service_dict, package_dict):
+    all_rest_services = []
+    for i in service_urls_map:
+        all_rest_services.append(service_urls_map[i][0])
+
+    for service in service_dict:
+        if service not in all_rest_services:
+            check, path_list = get_paths_inside_metamodel( service, service_dict )
+            if check:
+                for path in path_list:
+                    service_urls_map[path] = (service, '/api')
+                    package_name = path.split('/')[1]
+                    pack_arr = package_dict.get(package_name, [])
+                    if pack_arr == []:
+                        package_dict[package_name] = pack_arr
+                    pack_arr.append(path)
+
+def get_paths_inside_metamodel(service, service_dict):
+    path_list = set()
+    for operation_id in service_dict[service].operations.keys():
+        for request in service_dict[service].operations[operation_id].metadata.keys():
+            if request.lower() in ('post', 'put', 'patch', 'get', 'delete'):
+                path_list.add(service_dict[service].operations[operation_id].metadata[request].elements['path'].string_value)
+    
+    if path_list == set():
+        return False, []
+
+    return True, sorted(list(path_list))
+
 def main():
     # Get user input.
-    metadata_api_url, rest_navigation_url, output_dir, verify = get_input_params()
+    base_url, metadata_api_url, rest_navigation_url, output_dir, verify = get_input_params()
     # Maps enumeration id to enumeration info
     enumeration_dict = {}
     # Maps structure_id to structure_info
@@ -1275,22 +1362,37 @@ def main():
     session = requests.session()
     session.verify = False
     connector = get_requests_connector(session, url=metadata_api_url)
+    connector.set_application_context(ApplicationContext({SHOW_UNRELEASED_APIS: "True"}))
     print('Connected to ' + metadata_api_url)
     component_svc = get_component_service(connector)
     populate_dicts(component_svc, enumeration_dict, structure_dict, service_dict, service_urls_map, rest_navigation_url)
 
     service_urls_map = get_service_urls_from_rest_navigation(rest_navigation_url, verify)
+    # package_dict holds list of all service urls which come under /rest
     package_dict = categorize_service_urls_by_package_names(service_urls_map, rest_navigation_url)
     error_map = build_error_map()
+
+    # package_dict_api holds list of all service urls which come under /api 
+    package_dict_api = {}
+    add_service_urls_using_metamodel(service_urls_map, service_dict, package_dict_api)
 
     threads = []
     for package, service_urls in six.iteritems(package_dict):
         worker = threading.Thread(target=process_service_urls, args=(
             package, service_urls, output_dir, structure_dict, enumeration_dict, service_dict, service_urls_map
-            , error_map, rest_navigation_url))
+            , error_map, base_url))
         worker.daemon = True
         worker.start()
         threads.append(worker)
+
+    for package, service_urls in six.iteritems(package_dict_api):
+        worker = threading.Thread(target=process_service_urls, args=(
+            package, service_urls, output_dir, structure_dict, enumeration_dict, service_dict, service_urls_map
+            , error_map, base_url))
+        worker.daemon = True
+        worker.start()
+        threads.append(worker)
+    
     for worker in threads:
         worker.join()
 

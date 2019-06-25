@@ -24,14 +24,14 @@ class TestVmsGen(unittest.TestCase):
         test_args = ['vmsgen', '-vc', 'v_url']
         ssl_verify_expected = True
         with mock.patch('sys.argv', test_args):
-            _, _, _, ssl_verify_actual = vmsgen.get_input_params()
+            _, _, _, _, ssl_verify_actual = vmsgen.get_input_params()
         self.assertEqual(ssl_verify_expected, ssl_verify_actual)
 
         # case 1.2: SSL is insecure
         test_args = ['vmsgen', '-vc', 'v_url', '-k']
         ssl_verify_expected = False
         with mock.patch('sys.argv', test_args):
-            _, _, _, ssl_verify_actual = vmsgen.get_input_params()
+           _, _, _, _, ssl_verify_actual = vmsgen.get_input_params()
         self.assertEqual(ssl_verify_expected, ssl_verify_actual)
 
         # case 2.1: tag separator option (default)
