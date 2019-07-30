@@ -25,7 +25,8 @@ import re
 import requests
 import warnings
 warnings.filterwarnings("ignore")
-
+from vmware.vapi.lib.constants import SHOW_UNRELEASED_APIS
+from vmware.vapi.core import ApplicationContext
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -41,6 +42,8 @@ GENERATE_METAMODEL = False
 API_SERVER_HOST = '<vcenter>'
 TAG_SEPARATOR = '/'
 
+#Enable filtering of all unreleased APIs except tech-preview features listed below.
+enable_filtering = False
 
 def build_error_map():
     """
@@ -72,6 +75,16 @@ def build_error_map():
                  'com.vmware.vapi.std.errors.unverified_peer': http_client.BAD_REQUEST}
     return error_map
 
+def is_filtered(metadata):
+    if not enable_filtering:
+        return False
+    if len(metadata) == 0:
+        return False
+    if 'TechPreview' in metadata:
+        return False
+    if 'Changing' in metadata or 'Proposed' in metadata:
+        return True
+    return False
 
 def load_description():
     """
@@ -121,7 +134,7 @@ def get_all_services_urls(components_urls, verify=True):
     for url in components_urls:
         services = get_json(url, verify)
         for service in services:
-            service_url_dict[service['href']] = (service['name'], '/rest')
+            service_url_dict[service['href']] = service['name']
     return service_url_dict
 
 
@@ -133,7 +146,11 @@ def get_structure_info(struct_type, structure_svc):
         structure_info = structure_svc.get(struct_type)
         if structure_info is None:
             eprint("Could not fetch structure info for " + struct_type)
-        return structure_info
+        elif is_filtered(structure_info.metadata):
+            return None
+        else:
+            structure_info.fields = [field for field in structure_info.fields if not is_filtered(field.metadata)]
+            return structure_info
     except Exception as ex:
         eprint("Error fetching structure info for " + struct_type)
         eprint(ex)
@@ -296,7 +313,7 @@ def process_structure_info(type_name, structure_info, type_dict, structure_svc, 
 
 def process_enum_info(type_name, enum_info, type_dict):
     enum_type = {'type': 'string', 'description': enum_info.documentation}
-    enum_type.setdefault('enum', [value.value for value in enum_info.values])
+    enum_type.setdefault('enum', [value.value for value in enum_info.values if not is_filtered(value.metadata)])
     type_dict[type_name] = enum_type
 
 
@@ -325,7 +342,10 @@ def get_enum_info(type_name, enum_svc):
         enum_info = enum_svc.get(type_name)
         if enum_info is None:
             eprint("Could not fetch enum info for " + type_name)
-        return enum_info
+        elif is_filtered(enum_info.metadata):
+            return None
+        else:
+            return enum_info
     except Exception as exception:
         eprint("Error fetching enum info for " + type_name)
         eprint(exception)
@@ -1088,10 +1108,12 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
     type_dict = {}
     path_list = []
     for service_url in service_urls:
-
+        # print(service_url)
         service_name, service_end_point = service_url_dict.get(service_url, None)
         service_info = service_dict.get(service_name, None)
         if service_info is None:
+            continue
+        if is_filtered(service_info.metadata):
             continue
 
         ## Processing for /api end point
@@ -1116,6 +1138,9 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
             for operation in service_info.operations.values():
                 url, method = find_url_method(operation)
                 operation_id = operation.name
+                op_metadata = service_info.operations[operation_id].metadata
+                if is_filtered(op_metadata):
+                    continue
                 operation_info = service_info.operations.get(operation_id)
 
                 path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
@@ -1124,7 +1149,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
             continue
 
         # use rest navigation service to get the REST mappings for a service.
-        service_operations = get_json(service_url + '?~method=OPTIONS', False)
+        service_operations = get_json(base_url + service_end_point + service_url + '?~method=OPTIONS', False)
         if service_operations is None:
             continue
 
@@ -1145,6 +1170,9 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
                 continue
             operation_id = service_operation['name']
             if operation_id not in service_info.operations:
+                continue
+            op_metadata = service_info.operations[operation_id].metadata
+            if is_filtered(op_metadata):
                 continue
             url, method = find_url(service_operation['links'])
             url = get_service_path_from_service_url(url, base_url + service_end_point)
@@ -1177,6 +1205,9 @@ def get_input_params():
                         help="Pass this parameter to save each metamodel component as a new json file")
     parser.add_argument('--host', help='Domain name or IP address (IPv4) of the host that serves the API. '
                                              'Default value is "<vcenter>"')
+    parser.add_argument('-ef', '--enablefiltering', dest='filtering',
+                        help='Filters internal and unreleased apis', action='store_true')
+    parser.set_defaults(filtering=False)
     args = parser.parse_args()
     metadata_url = args.metadata_url
     rest_navigation_url = args.rest_navigation_url
@@ -1198,6 +1229,8 @@ def get_input_params():
     GENERATE_UNIQUE_OP_IDS = args.unique_operation_ids
     global TAG_SEPARATOR
     TAG_SEPARATOR = args.tag_separator
+    global enable_filtering
+    enable_filtering = args.filtering
     global GENERATE_METAMODEL
     GENERATE_METAMODEL = args.metamodel_components
     return 'https://%s' % vcip, metadata_url, rest_navigation_url, output_dir, verify
@@ -1212,23 +1245,6 @@ def get_component_service(connector):
 def get_service_urls_from_rest_navigation(rest_navigation_url, verify):
     component_services_urls = get_component_services_urls(rest_navigation_url, verify)
     return get_all_services_urls(component_services_urls, verify)
-
-
-def categorize_service_urls_by_package_names(service_urls_map, base_url):
-    package_dict = {}
-    for service_url in service_urls_map:
-        # service_url = u'https://vcip/rest/com/vmware/vapi/metadata/metamodel/resource/model'
-        # service_path = /com/vmware/vapi/metadata/metamodel/resource/model
-        # package =vapi
-        service_path = get_service_path_from_service_url(service_url, base_url)
-        package = service_path.split('/')[3]
-        if package in package_dict:
-            packages = package_dict[package]
-            packages.append(service_url)
-        else:
-            package_dict.setdefault(package, [service_url])
-    return package_dict
-
 
 def get_service_path_from_service_url(service_url, base_url):
     if not service_url.startswith(base_url):
@@ -1316,22 +1332,47 @@ def get_service_url_from_service_id(base_url, service_id):
     return base_url + '/' + replaced_string.replace('_', '-')
 
 
-def add_service_urls_using_metamodel(service_urls_map, service_dict, package_dict):
+def add_service_urls_using_metamodel(service_urls_map, service_dict, rest_navigation_url):
+
+    package_dict_api = {}
+    package_dict = {}
+
     all_rest_services = []
     for i in service_urls_map:
         all_rest_services.append(service_urls_map[i][0])
 
+    rest_services = {}
+    for k, v in service_urls_map.items():
+        rest_services.update({
+            v:k
+        })
+
+
     for service in service_dict:
-        if service not in all_rest_services:
-            check, path_list = get_paths_inside_metamodel( service, service_dict )
-            if check:
-                for path in path_list:
-                    service_urls_map[path] = (service, '/api')
-                    package_name = path.split('/')[1]
-                    pack_arr = package_dict.get(package_name, [])
-                    if pack_arr == []:
-                        package_dict[package_name] = pack_arr
-                    pack_arr.append(path)
+        # if service not in all_rest_services:
+        check, path_list = get_paths_inside_metamodel( service, service_dict )
+        if check:
+            for path in path_list:
+                service_urls_map[path] = (service, '/api')
+                package_name = path.split('/')[1]
+                pack_arr = package_dict_api.get(package_name, [])
+                if pack_arr == []:
+                    package_dict_api[package_name] = pack_arr
+                pack_arr.append(path)
+        else:
+            service_url = rest_services.get(service, None)
+            if service_url != None:
+                service_path = get_service_path_from_service_url(service_url, rest_navigation_url)
+                service_urls_map[service_path] = (service, '/rest')
+                package = service_path.split('/')[3]
+                if package in package_dict:
+                    packages = package_dict[package]
+                    packages.append(service_path)
+                else:
+                    package_dict.setdefault(package, [service_path])
+            else:
+                print("Service doesnot belong to either /api or /rest ", service)
+    return package_dict_api, package_dict
 
 def get_paths_inside_metamodel(service, service_dict):
     path_list = set()
@@ -1362,19 +1403,21 @@ def main():
     session = requests.session()
     session.verify = False
     connector = get_requests_connector(session, url=metadata_api_url)
-    connector.set_application_context(ApplicationContext({SHOW_UNRELEASED_APIS: "True"}))
+    if not enable_filtering:
+        connector.set_application_context(ApplicationContext({SHOW_UNRELEASED_APIS: "True"}))
     print('Connected to ' + metadata_api_url)
     component_svc = get_component_service(connector)
     populate_dicts(component_svc, enumeration_dict, structure_dict, service_dict, service_urls_map, rest_navigation_url)
 
-    service_urls_map = get_service_urls_from_rest_navigation(rest_navigation_url, verify)
-    # package_dict holds list of all service urls which come under /rest
-    package_dict = categorize_service_urls_by_package_names(service_urls_map, rest_navigation_url)
+    if enable_filtering:
+        # If filtering is enabled, get service urls from rest navigation because rest navigation takes care of filtering.
+        # else, Get service urls from metamodel metadata.
+        service_urls_map = get_service_urls_from_rest_navigation(rest_navigation_url, verify)
+
     error_map = build_error_map()
 
     # package_dict_api holds list of all service urls which come under /api 
-    package_dict_api = {}
-    add_service_urls_using_metamodel(service_urls_map, service_dict, package_dict_api)
+    package_dict_api, package_dict = add_service_urls_using_metamodel(service_urls_map, service_dict, rest_navigation_url)
 
     threads = []
     for package, service_urls in six.iteritems(package_dict):
