@@ -1102,7 +1102,7 @@ def api_get_url_and_method(metadata):
             return method, url_path
 
 def process_service_urls(package_name, service_urls, output_dir, structure_dict, enum_dict,
-                         service_dict, service_url_dict, error_map, base_url):
+                         service_dict, service_url_dict, error_map, rest_navigation_url):
 
     print('processing package ' + package_name + os.linesep)
     type_dict = {}
@@ -1149,7 +1149,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
             continue
 
         # use rest navigation service to get the REST mappings for a service.
-        service_operations = get_json(base_url + service_end_point + service_url + '?~method=OPTIONS', False)
+        service_operations = get_json(rest_navigation_url + service_url + '?~method=OPTIONS', False)
         if service_operations is None:
             continue
 
@@ -1175,7 +1175,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
             if is_filtered(op_metadata):
                 continue
             url, method = find_url(service_operation['links'])
-            url = get_service_path_from_service_url(url, base_url + service_end_point)
+            url = get_service_path_from_service_url(url, rest_navigation_url)
             operation_info = service_info.operations.get(operation_id)
             path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
                             operation_id, error_map)
@@ -1217,6 +1217,7 @@ def get_input_params():
             metadata_url = 'https://%s/api' % vcip
         if rest_navigation_url is None:
             rest_navigation_url = 'https://%s/rest' % vcip
+
     if metadata_url is None or rest_navigation_url is None:
         raise ValueError('metadataUrl and restNavigationUrl are required parameters')
     metadata_url = metadata_url.rstrip('/')
@@ -1233,7 +1234,7 @@ def get_input_params():
     enable_filtering = args.filtering
     global GENERATE_METAMODEL
     GENERATE_METAMODEL = args.metamodel_components
-    return 'https://%s' % vcip, metadata_url, rest_navigation_url, output_dir, verify
+    return metadata_url, rest_navigation_url, output_dir, verify
 
 
 def get_component_service(connector):
@@ -1388,7 +1389,7 @@ def get_paths_inside_metamodel(service, service_dict):
 
 def main():
     # Get user input.
-    base_url, metadata_api_url, rest_navigation_url, output_dir, verify = get_input_params()
+    metadata_api_url, rest_navigation_url, output_dir, verify = get_input_params()
     # Maps enumeration id to enumeration info
     enumeration_dict = {}
     # Maps structure_id to structure_info
@@ -1423,7 +1424,7 @@ def main():
     for package, service_urls in six.iteritems(package_dict):
         worker = threading.Thread(target=process_service_urls, args=(
             package, service_urls, output_dir, structure_dict, enumeration_dict, service_dict, service_urls_map
-            , error_map, base_url))
+            , error_map, rest_navigation_url))
         worker.daemon = True
         worker.start()
         threads.append(worker)
@@ -1431,7 +1432,7 @@ def main():
     for package, service_urls in six.iteritems(package_dict_api):
         worker = threading.Thread(target=process_service_urls, args=(
             package, service_urls, output_dir, structure_dict, enumeration_dict, service_dict, service_urls_map
-            , error_map, base_url))
+            , error_map, rest_navigation_url))
         worker.daemon = True
         worker.start()
         threads.append(worker)
@@ -1440,7 +1441,14 @@ def main():
         worker.join()
 
     # api.json contains list of packages which is used by UI to dynamically populate dropdown.
-    api_files = {'files': list(package_dict.keys())}
+    api_files_list = []
+    for name in list(package_dict.keys()):
+        api_files_list.append("rest_"+name)
+
+    for name in list(package_dict_api.keys()):
+        api_files_list.append("api_"+name)
+
+    api_files = { 'files': api_files_list }
     write_json_data_to_file(output_dir + os.path.sep + 'api.json', api_files)
     stop = timeit.default_timer()
     print('Generated swagger files at ' + output_dir + ' for ' + metadata_api_url + ' in ' + str(
