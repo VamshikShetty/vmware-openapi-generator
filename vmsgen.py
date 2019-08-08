@@ -410,7 +410,7 @@ def get_response_object_name(service_id, operation_id):
     return service_id + '.' + operation_id
 
 
-def populate_response_map(output, errors, error_map, type_dict, structure_svc, enum_svc, service_id, operation_id):
+def populate_response_map(output, errors, error_map, type_dict, structure_svc, enum_svc, service_id, operation_id, endpoint):
     response_map = {}
     success_response = {'description': output.documentation}
     schema = find_output_schema(output, type_dict, structure_svc, enum_svc)
@@ -418,12 +418,23 @@ def populate_response_map(output, errors, error_map, type_dict, structure_svc, e
     # this prevents showing response as void in swagger-ui
     if schema is not None:
         if not ('type' in schema and schema['type'] == 'void'):
-            value_wrapper = {'type': 'object',
-                             'properties': {'value': schema},
-                             'required': ['value']}
+            # Handling Value wrappers for /rest and /api
+            if endpoint == "rest":
+                resp = {
+                    'type': 'object',
+                    'properties': {'value': schema},
+                    'required': ['value']
+                }
+            elif endpoint == "api":
+                resp = {
+                    'type': 'object',
+                    'properties': schema 
+                }
+            else:
+                print("Endpoint at populate_response_map is unknown : ", endpoint)
             type_name = get_response_object_name(service_id, operation_id) + '_result'
             if type_name not in type_dict:
-                type_dict[type_name] = value_wrapper
+                type_dict[type_name] = resp
             success_response['schema'] = {"$ref": "#/definitions/" + type_name}
     # success response is not mapped through metamodel.
     # hardcode it for now.
@@ -942,7 +953,7 @@ def process_get_request(url, params, type_dict, structure_svc, enum_svc):
 
 
 def wrap_body_params(service_name, operation_name, body_param_list, type_dict, structure_svc,
-                     enum_svc):
+                     enum_svc, endpoint):
     """
     Creates a  json object wrapper around request body parameters. parameter names are used as keys and the
     parameters as values.
@@ -961,17 +972,28 @@ def wrap_body_params(service_name, operation_name, body_param_list, type_dict, s
     required = []
     name_array = []
     for param in body_param_list:
-        parameter_obj = {}
-        visit_type_category(param.type, parameter_obj, type_dict, structure_svc,
-                            enum_svc)
-        name_array.append(param.name)
-        parameter_obj['description'] = param.documentation
-        properties_obj[param.name] = parameter_obj
-        if 'required' not in parameter_obj:
-            required.append(param.name)
-        else:
-            if parameter_obj['required'] == 'true':
+        if endpoint == "rest":
+            parameter_obj = {}
+            visit_type_category(param.type, parameter_obj, type_dict, structure_svc,
+                                enum_svc)
+            name_array.append(param.name)
+            parameter_obj['description'] = param.documentation
+            properties_obj[param.name] = parameter_obj
+            if 'required' not in parameter_obj:
                 required.append(param.name)
+            else:
+                if parameter_obj['required'] == 'true':
+                    required.append(param.name)
+        elif endpoint == "api":
+            visit_type_category(param.type, properties_obj, type_dict, structure_svc, enum_svc)
+            properties_obj['description'] = param.documentation
+            if 'required' not in properties_obj:
+                required.append(param.name)
+            else:
+                if properties_obj['required'] == 'true':
+                    required.append(param.name)
+        else:
+            print("Endpoint at wrap_body_params is unknown : ", endpoint)
 
     parameter_obj = {'in': 'body', 'name': 'request_body'}
     if len(required) > 0:
@@ -986,7 +1008,7 @@ def wrap_body_params(service_name, operation_name, body_param_list, type_dict, s
 
 
 def process_put_post_patch_request(url, service_name, operation_name, params,
-                                   type_dict, structure_svc, enum_svc):
+                                   type_dict, structure_svc, enum_svc, endpoint):
     """
     Handles http post/put/patch request.
     todo: handle query, formData and header parameters
@@ -1000,7 +1022,7 @@ def process_put_post_patch_request(url, service_name, operation_name, params,
 
     if body_param_list:
         parx = wrap_body_params(service_name, operation_name, body_param_list, type_dict,
-                                structure_svc, enum_svc)
+                                structure_svc, enum_svc, endpoint)
         if parx is not None:
             par_array.append(parx)
     return par_array, new_url
@@ -1020,11 +1042,11 @@ def process_delete_request(url, params, type_dict, structure_svc, enum_svc):
 
 
 def handle_request_mapping(url, method_type, service_name, operation_name, params_metadata,
-                           type_dict, structure_svc, enum_svc):
+                           type_dict, structure_svc, enum_svc, endpoint):
     if method_type in ('post', 'put', 'patch'):
         return process_put_post_patch_request(url, service_name, operation_name,
                                               params_metadata, type_dict, structure_svc,
-                                              enum_svc)
+                                              enum_svc, endpoint)
     if method_type == 'get':
         return process_get_request(url, params_metadata, type_dict,
                                    structure_svc, enum_svc)
@@ -1072,7 +1094,7 @@ def contains_rm_annotation(service_info):
 
 
 def get_path(operation_info, http_method, url, service_name, type_dict, structure_dict, enum_dict,
-             operation_id, error_map):
+             operation_id, error_map, endpoint):
     documentation = operation_info.documentation
     params = operation_info.params
     errors = operation_info.errors
@@ -1082,10 +1104,10 @@ def get_path(operation_info, http_method, url, service_name, type_dict, structur
     produces = None
     par_array, url = handle_request_mapping(url, http_method, service_name,
                                             operation_id, params, type_dict,
-                                            structure_dict, enum_dict)
+                                            structure_dict, enum_dict, endpoint)
     response_map = populate_response_map(output,
                                          errors,
-                                         error_map, type_dict, structure_dict, enum_dict, service_name, operation_id)
+                                         error_map, type_dict, structure_dict, enum_dict, service_name, operation_id, endpoint)
 
     path = build_path(service_name,
                       http_method,
@@ -1129,7 +1151,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
                     url = url + '?' + params
 
                 path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
-                                operation_id, error_map)
+                                operation_id, error_map, "api")
                 path_list.append(path)
             continue
 
@@ -1144,7 +1166,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
                 operation_info = service_info.operations.get(operation_id)
 
                 path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
-                                operation_id, error_map)
+                                operation_id, error_map, "rest")
                 path_list.append(path)
             continue
 
@@ -1178,7 +1200,7 @@ def process_service_urls(package_name, service_urls, output_dir, structure_dict,
             url = get_service_path_from_service_url(url, rest_navigation_url)
             operation_info = service_info.operations.get(operation_id)
             path = get_path(operation_info, method, url, service_name, type_dict, structure_dict, enum_dict,
-                            operation_id, error_map)
+                            operation_id, error_map, "rest")
             path_list.append(path)
     path_dict = convert_path_list_to_path_map(path_list)
     cleanup(path_dict=path_dict, type_dict=type_dict)
