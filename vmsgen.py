@@ -559,9 +559,10 @@ def cleanup(path_dict, type_dict):
     for _, type_object in six.iteritems(type_dict):
         if 'properties' in type_object:
             properties = type_object['properties']
-            for _, property_value in six.iteritems(properties):
-                if 'required' in property_value and isinstance(property_value['required'], bool):
-                    del property_value['required']
+            for key, property_value in six.iteritems(properties):
+                if key == "value":
+                    if 'required' in property_value and isinstance(property_value['required'], bool):
+                        del property_value['required']
     for _, path_value in six.iteritems(path_dict):
         for _, method_value in six.iteritems(path_value):
             if 'path' in method_value:
@@ -970,13 +971,13 @@ def wrap_body_params(service_name, operation_name, body_param_list, type_dict, s
     properties_obj = {}
     body_obj['properties'] = properties_obj
     required = []
-    name_array = []
+    # name_array = []
     for param in body_param_list:
         if endpoint == "rest":
             parameter_obj = {}
             visit_type_category(param.type, parameter_obj, type_dict, structure_svc,
                                 enum_svc)
-            name_array.append(param.name)
+            # name_array.append(param.name)
             parameter_obj['description'] = param.documentation
             properties_obj[param.name] = parameter_obj
             if 'required' not in parameter_obj:
@@ -987,11 +988,6 @@ def wrap_body_params(service_name, operation_name, body_param_list, type_dict, s
         elif endpoint == "api":
             visit_type_category(param.type, properties_obj, type_dict, structure_svc, enum_svc)
             properties_obj['description'] = param.documentation
-            if 'required' not in properties_obj:
-                required.append(param.name)
-            else:
-                if properties_obj['required'] == 'true':
-                    required.append(param.name)
         else:
             print("Endpoint at wrap_body_params is unknown : ", endpoint)
 
