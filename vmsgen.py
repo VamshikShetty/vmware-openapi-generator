@@ -929,6 +929,8 @@ def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_sv
         if 'properties' in type_ref:
             for property_name, property_value in six.iteritems(type_ref['properties']):
                 prop = {'in': 'query', 'name': query_param_info.name + '.' + property_name}
+                if endpoint == "api":
+                    prop = { 'in': 'query', 'name': property_name }
                 if 'type' in property_value:
                     prop['type'] = property_value['type']
                     if prop['type'] == 'array':
@@ -947,6 +949,9 @@ def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_sv
                     prop_obj = type_dict[reference]
                     if 'type' in prop_obj:
                         prop['type'] = prop_obj['type']
+                        # Query parameter's type is object, Coverting it to string given type object for query is not supported by swagger 2.0.
+                        if prop['type'] == "object":
+                            prop['type' ] = "string" 
                     if 'enum' in prop_obj:
                         prop['enum'] = prop_obj['enum']
                     if 'description' in prop_obj:
