@@ -138,25 +138,6 @@ def get_all_services_urls(components_urls, verify=True):
     return service_url_dict
 
 
-def get_structure_info(struct_type, structure_svc):
-    """
-    Given a type, return its structure info, if the type is a structure.
-    """
-    try:
-        structure_info = structure_svc.get(struct_type)
-        if structure_info is None:
-            eprint("Could not fetch structure info for " + struct_type)
-        elif is_filtered(structure_info.metadata):
-            return None
-        else:
-            structure_info.fields = [field for field in structure_info.fields if not is_filtered(field.metadata)]
-            return structure_info
-    except Exception as ex:
-        eprint("Error fetching structure info for " + struct_type)
-        eprint(ex)
-        return None
-
-
 def get_service_info(service_id, service_dict):
     """
     Given a service_id, return its ServiceInfo
@@ -196,173 +177,226 @@ def metamodel_to_swagger_type_converter(input_type):
         return 'string', 'binary'
     return input_type, None
 
+class typeHandler():
 
-def visit_type_category(struct_type, new_prop, type_dict, structure_svc, enum_svc):
-    if isinstance(struct_type, dict):
-        return visit_type_category_dict(struct_type, new_prop, type_dict, structure_svc, enum_svc)
-    if struct_type.category == 'BUILTIN':
-        visit_builtin(struct_type.builtin_type, new_prop)
-    elif struct_type.category == 'GENERIC':
-        visit_generic(struct_type.generic_instantiation, new_prop, type_dict, structure_svc,
-                      enum_svc)
-    elif struct_type.category == 'USER_DEFINED':
-        visit_user_defined(struct_type.user_defined_type, new_prop, type_dict, structure_svc,
-                           enum_svc)
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
 
-
-def visit_type_category_dict(struct_type, new_prop, type_dict, structure_svc, enum_svc):
-    new_prop['required'] = True
-    if struct_type['category'] == 'BUILTIN':
-        visit_builtin(struct_type['builtin_type'], new_prop)
-    elif struct_type['category'] == 'GENERIC':
-        visit_generic(struct_type['generic_instantiation'], new_prop, type_dict, structure_svc,
-                      enum_svc)
-    elif struct_type['category'] == 'USER_DEFINED':
-        visit_user_defined(struct_type['user_defined_type'], new_prop, type_dict, structure_svc,
-                           enum_svc)
+    def visit_type_category(self, struct_type, new_prop, type_dict, structure_svc, enum_svc):
+        if isinstance(struct_type, dict):
+            return self.visit_type_category_dict(struct_type, new_prop, type_dict, structure_svc, enum_svc)
+        if struct_type.category == 'BUILTIN':
+            self.visit_builtin(struct_type.builtin_type, new_prop)
+        elif struct_type.category == 'GENERIC':
+            self.visit_generic(struct_type.generic_instantiation, new_prop, type_dict, structure_svc,
+                        enum_svc)
+        elif struct_type.category == 'USER_DEFINED':
+            self.visit_user_defined(struct_type.user_defined_type, new_prop, type_dict, structure_svc,
+                            enum_svc)
 
 
-def visit_builtin(builtin_type, new_prop):
-    data_type, format_ = metamodel_to_swagger_type_converter(builtin_type)
-    if 'type' in new_prop and new_prop['type'] == 'array':
-        item_obj = {'type': data_type}
-        new_prop['items'] = item_obj
-        if format_ is not None:
-            item_obj['format'] = format_
-    else:
-        new_prop['type'] = data_type
-        if format_ is not None:
-            new_prop['format'] = format_
+    def visit_type_category_dict(self, struct_type, new_prop, type_dict, structure_svc, enum_svc):
+        new_prop['required'] = True
+        if struct_type['category'] == 'BUILTIN':
+            self.visit_builtin(struct_type['builtin_type'], new_prop)
+        elif struct_type['category'] == 'GENERIC':
+            self.visit_generic(struct_type['generic_instantiation'], new_prop, type_dict, structure_svc,
+                        enum_svc)
+        elif struct_type['category'] == 'USER_DEFINED':
+            self.visit_user_defined(struct_type['user_defined_type'], new_prop, type_dict, structure_svc,
+                            enum_svc)
 
 
-def visit_generic(generic_instantiation, new_prop, type_dict, structure_svc, enum_svc):
-    if generic_instantiation.generic_type == 'OPTIONAL':
-        new_prop['required'] = False
-        visit_type_category(generic_instantiation.element_type, new_prop, type_dict,
-                            structure_svc, enum_svc)
-    elif generic_instantiation.generic_type == 'LIST':
-        new_prop['type'] = 'array'
-        visit_type_category(generic_instantiation.element_type, new_prop, type_dict,
-                            structure_svc, enum_svc)
-    elif generic_instantiation.generic_type == 'SET':
-        new_prop['type'] = 'array'
-        new_prop['uniqueItems'] = True
-        visit_type_category(generic_instantiation.element_type, new_prop, type_dict,
-                            structure_svc, enum_svc)
-    elif generic_instantiation.generic_type == 'MAP':
-        new_type = {'type': 'object', 'properties': {}}
-        if generic_instantiation.map_key_type.category == 'USER_DEFINED':
-            res_id = generic_instantiation.map_key_type.user_defined_type.resource_id
-            res_type = generic_instantiation.map_key_type.user_defined_type.resource_type
-            new_type['properties']['key'] = {'$ref': '#/definitions/' + res_id}
-            check_type(res_type, res_id, type_dict, structure_svc, enum_svc)
+    def visit_builtin(self, builtin_type, new_prop):
+        data_type, format_ = metamodel_to_swagger_type_converter(builtin_type)
+        if 'type' in new_prop and new_prop['type'] == 'array':
+            item_obj = {'type': data_type}
+            new_prop['items'] = item_obj
+            if format_ is not None:
+                item_obj['format'] = format_
         else:
-            new_type['properties']['key'] = {'type': metamodel_to_swagger_type_converter(
-                generic_instantiation.map_key_type.builtin_type)[0]}
-        if generic_instantiation.map_value_type.category == 'USER_DEFINED':
-            new_type['properties']['value'] = {
-                '$ref': '#/definitions/' + generic_instantiation.map_value_type.user_defined_type.resource_id}
-            res_type = generic_instantiation.map_value_type.user_defined_type.resource_type
-            res_id = generic_instantiation.map_value_type.user_defined_type.resource_id
-            check_type(res_type, res_id, type_dict, structure_svc, enum_svc)
-        elif generic_instantiation.map_value_type.category == 'BUILTIN':
-            new_type['properties']['value'] = {'type': metamodel_to_swagger_type_converter(
-                generic_instantiation.map_value_type.builtin_type)[0]}
-        elif generic_instantiation.map_value_type.category == 'GENERIC':
-            new_type['properties']['value'] = {}
-            visit_generic(generic_instantiation.map_value_type.generic_instantiation,
-                          new_type['properties']['value'], type_dict, structure_svc, enum_svc)
-        new_prop['type'] = 'array'
-        new_prop['items'] = new_type
-        if '$ref' in new_prop:
-            del new_prop['$ref']
+            new_prop['type'] = data_type
+            if format_ is not None:
+                new_prop['format'] = format_
 
 
-def is_type_builtin(type_):
-    type_ = type_.lower()
-    typeset = {'binary', 'boolean', 'datetime', 'double', 'dynamicstructure', 'exception',
-               'id', 'long', 'opaque', 'secret', 'string', 'uri'}
-    if type_ in typeset:
-        return True
-    return False
+    def visit_generic(self, generic_instantiation, new_prop, type_dict, structure_svc, enum_svc):
+        if generic_instantiation.generic_type == 'OPTIONAL':
+            new_prop['required'] = False
+            self.visit_type_category(generic_instantiation.element_type, new_prop, type_dict,
+                                structure_svc, enum_svc)
+        elif generic_instantiation.generic_type == 'LIST':
+            new_prop['type'] = 'array'
+            self.visit_type_category(generic_instantiation.element_type, new_prop, type_dict,
+                                structure_svc, enum_svc)
+        elif generic_instantiation.generic_type == 'SET':
+            new_prop['type'] = 'array'
+            new_prop['uniqueItems'] = True
+            self.visit_type_category(generic_instantiation.element_type, new_prop, type_dict,
+                                structure_svc, enum_svc)
+        elif generic_instantiation.generic_type == 'MAP':
+            # Have static key/value pair object maping for /rest paths
+            # while use additionalProperties for /api paths
+            if self.endpoint == "rest": 
+                new_type = {'type': 'object', 'properties': {}}
+            elif self.endpoint == "api":
+                new_type = {'type': 'object', 'additionalProperties': {}}
+
+            if self.endpoint == "rest":
+                if generic_instantiation.map_key_type.category == 'USER_DEFINED':
+                    res_id = generic_instantiation.map_key_type.user_defined_type.resource_id
+                    res_type = generic_instantiation.map_key_type.user_defined_type.resource_type
+                    
+                    new_type['properties']['key'] = {'$ref': '#/definitions/' + res_id}
+                    self.check_type(res_type, res_id, type_dict, structure_svc, enum_svc)
+                else:
+                    new_type['properties']['key'] = {'type': metamodel_to_swagger_type_converter(
+                        generic_instantiation.map_key_type.builtin_type)[0]}
+
+            if generic_instantiation.map_value_type.category == 'USER_DEFINED':
+                
+                if self.endpoint == "rest":
+                    new_type['properties']['value'] = {
+                        '$ref': '#/definitions/' + generic_instantiation.map_value_type.user_defined_type.resource_id}
+                elif self.endpoint == "api":
+                    new_type['additionalProperties'] = {
+                        '$ref': '#/definitions/' + generic_instantiation.map_value_type.user_defined_type.resource_id
+                    }
+
+                res_type = generic_instantiation.map_value_type.user_defined_type.resource_type
+                res_id = generic_instantiation.map_value_type.user_defined_type.resource_id
+                self.check_type(res_type, res_id, type_dict, structure_svc, enum_svc)
+
+            elif generic_instantiation.map_value_type.category == 'BUILTIN':
+                if self.endpoint == "rest":
+                    new_type['properties']['value'] = {'type': metamodel_to_swagger_type_converter(
+                    generic_instantiation.map_value_type.builtin_type)[0]}
+                elif self.endpoint == "api":
+                    new_type['additionalProperties'] = {'type': metamodel_to_swagger_type_converter(
+                    generic_instantiation.map_value_type.builtin_type)[0]}
+                
+
+            elif generic_instantiation.map_value_type.category == 'GENERIC':
+                temp_new_type = {}
+                self.visit_generic( generic_instantiation.map_value_type.generic_instantiation,
+                            temp_new_type, type_dict, structure_svc, enum_svc)
+                
+                if self.endpoint == "rest":
+                    new_type['properties']['value'] = temp_new_type
+                elif self.endpoint == "api":
+                    new_type['additionalProperties'] = temp_new_type
+                
+
+            new_prop['type'] = 'array'
+            new_prop['items'] = new_type
+
+            if 'additionalProperties' in new_type:
+                if not new_type['additionalProperties'].get('required', True):
+                    del new_type['additionalProperties']['required']
+
+            if '$ref' in new_prop:
+                del new_prop['$ref']
 
 
-def process_structure_info(type_name, structure_info, type_dict, structure_svc, enum_svc):
-    new_type = {'type': 'object', 'properties': {}}
-    for field in structure_info.fields:
-        newprop = {'description': field.documentation}
-        if field.type.category == 'BUILTIN':
-            visit_builtin(field.type.builtin_type, newprop)
-        elif field.type.category == 'GENERIC':
-            visit_generic(field.type.generic_instantiation, newprop, type_dict,
-                          structure_svc, enum_svc)
-        elif field.type.category == 'USER_DEFINED':
-            visit_user_defined(field.type.user_defined_type, newprop, type_dict,
-                               structure_svc, enum_svc)
-        new_type['properties'].setdefault(field.name, newprop)
-    required = []
-    for property_name, property_value in six.iteritems(new_type['properties']):
-        if 'required' not in property_value:
-            required.append(property_name)
-        elif property_value['required'] == 'true':
-            required.append(property_name)
-    if len(required) > 0:
-        new_type['required'] = required
-    type_dict[type_name] = new_type
+    def is_type_builtin(self, type_):
+        type_ = type_.lower()
+        typeset = {'binary', 'boolean', 'datetime', 'double', 'dynamicstructure', 'exception',
+                'id', 'long', 'opaque', 'secret', 'string', 'uri'}
+        if type_ in typeset:
+            return True
+        return False
 
-
-def process_enum_info(type_name, enum_info, type_dict):
-    enum_type = {'type': 'string', 'description': enum_info.documentation}
-    enum_type.setdefault('enum', [value.value for value in enum_info.values if not is_filtered(value.metadata)])
-    type_dict[type_name] = enum_type
-
-
-def check_type(resource_type, type_name, type_dict, structure_svc, enum_svc):
-    if type_name in type_dict or is_type_builtin(type_name):
-        return
-    if resource_type == 'com.vmware.vapi.structure':
-        structure_info = get_structure_info(type_name, structure_svc)
-        if structure_info is not None:
-            # Mark it as visited to handle recursive definitions. (Type A referring to Type A in one of the fields).
-            type_dict[type_name] = {}
-            process_structure_info(type_name, structure_info, type_dict, structure_svc, enum_svc)
-    else:
-        enum_info = get_enum_info(type_name, enum_svc)
-        if enum_info is not None:
-            # Mark it as visited to handle recursive definitions. (Type A referring to Type A in one of the fields).
-            type_dict[type_name] = {}
-            process_enum_info(type_name, enum_info, type_dict)
-
-
-def get_enum_info(type_name, enum_svc):
-    """
-    Given a type, return its enum info, if the type is enum.
-    """
-    try:
-        enum_info = enum_svc.get(type_name)
-        if enum_info is None:
-            eprint("Could not fetch enum info for " + type_name)
-        elif is_filtered(enum_info.metadata):
+    def get_structure_info(self, struct_type, structure_svc):
+        """
+        Given a type, return its structure info, if the type is a structure.
+        """
+        try:
+            structure_info = structure_svc.get(struct_type)
+            if structure_info is None:
+                eprint("Could not fetch structure info for " + struct_type)
+            elif is_filtered(structure_info.metadata):
+                return None
+            else:
+                structure_info.fields = [field for field in structure_info.fields if not is_filtered(field.metadata)]
+                return structure_info
+        except Exception as ex:
+            eprint("Error fetching structure info for " + struct_type)
+            eprint(ex)
             return None
+
+
+    def process_structure_info(self, type_name, structure_info, type_dict, structure_svc, enum_svc):
+        new_type = {'type': 'object', 'properties': {}}
+        for field in structure_info.fields:
+            newprop = {'description': field.documentation}
+            if field.type.category == 'BUILTIN':
+                self.visit_builtin(field.type.builtin_type, newprop)
+            elif field.type.category == 'GENERIC':
+                self.visit_generic(field.type.generic_instantiation, newprop, type_dict,
+                            structure_svc, enum_svc)
+            elif field.type.category == 'USER_DEFINED':
+                self.visit_user_defined(field.type.user_defined_type, newprop, type_dict,
+                                structure_svc, enum_svc)
+            new_type['properties'].setdefault(field.name, newprop)
+        required = []
+        for property_name, property_value in six.iteritems(new_type['properties']):
+            if 'required' not in property_value:
+                required.append(property_name)
+            elif property_value['required'] == 'true':
+                required.append(property_name)
+        if len(required) > 0:
+            new_type['required'] = required
+        type_dict[type_name] = new_type
+
+    def get_enum_info(self, type_name, enum_svc):
+        """
+        Given a type, return its enum info, if the type is enum.
+        """
+        try:
+            enum_info = enum_svc.get(type_name)
+            if enum_info is None:
+                eprint("Could not fetch enum info for " + type_name)
+            elif is_filtered(enum_info.metadata):
+                return None
+            else:
+                return enum_info
+        except Exception as exception:
+            eprint("Error fetching enum info for " + type_name)
+            eprint(exception)
+            return None
+
+    def process_enum_info(self, type_name, enum_info, type_dict):
+        enum_type = {'type': 'string', 'description': enum_info.documentation}
+        enum_type.setdefault('enum', [value.value for value in enum_info.values if not is_filtered(value.metadata)])
+        type_dict[type_name] = enum_type
+
+    def check_type(self, resource_type, type_name, type_dict, structure_svc, enum_svc):
+        if type_name in type_dict or self.is_type_builtin(type_name):
+            return
+        if resource_type == 'com.vmware.vapi.structure':
+            structure_info = self.get_structure_info(type_name, structure_svc)
+            if structure_info is not None:
+                # Mark it as visited to handle recursive definitions. (Type A referring to Type A in one of the fields).
+                type_dict[type_name] = {}
+                self.process_structure_info(type_name, structure_info, type_dict, structure_svc, enum_svc)
         else:
-            return enum_info
-    except Exception as exception:
-        eprint("Error fetching enum info for " + type_name)
-        eprint(exception)
-        return None
+            enum_info = self.get_enum_info(type_name, enum_svc)
+            if enum_info is not None:
+                # Mark it as visited to handle recursive definitions. (Type A referring to Type A in one of the fields).
+                type_dict[type_name] = {}
+                self.process_enum_info(type_name, enum_info, type_dict)
 
+    def visit_user_defined(self, user_defined_type, newprop, type_dict, structure_svc, enum_svc):
+        if user_defined_type.resource_id is None:
+            return
+        if 'type' in newprop and newprop['type'] == 'array':
+            item_obj = {'$ref': '#/definitions/' + user_defined_type.resource_id}
+            newprop['items'] = item_obj
+        # if not array, fill in type or ref
+        else:
+            newprop['$ref'] = '#/definitions/' + user_defined_type.resource_id
 
-def visit_user_defined(user_defined_type, newprop, type_dict, structure_svc, enum_svc):
-    if user_defined_type.resource_id is None:
-        return
-    if 'type' in newprop and newprop['type'] == 'array':
-        item_obj = {'$ref': '#/definitions/' + user_defined_type.resource_id}
-        newprop['items'] = item_obj
-    # if not array, fill in type or ref
-    else:
-        newprop['$ref'] = '#/definitions/' + user_defined_type.resource_id
-
-    check_type(user_defined_type.resource_type, user_defined_type.resource_id, type_dict, structure_svc, enum_svc)
+        self.check_type(user_defined_type.resource_type, user_defined_type.resource_id, type_dict, structure_svc, enum_svc)
 
 
 def find_string_element_value(element_value):
@@ -378,31 +412,30 @@ def find_string_element_value(element_value):
 
 
 def convert_field_info_to_swagger_parameter(param_type, input_parameter_obj, type_dict,
-                                            structure_svc, enum_svc):
+                                            structure_svc, enum_svc, endpoint):
     """
     Converts metamodel fieldinfo to swagger parameter.
     """
     parameter_obj = {}
-    visit_type_category(input_parameter_obj.type, parameter_obj, type_dict,
-                        structure_svc, enum_svc)
+    tpHandler = typeHandler(endpoint)
+    tpHandler.visit_type_category(input_parameter_obj.type, parameter_obj, type_dict, structure_svc, enum_svc)
     if 'required' not in parameter_obj:
         parameter_obj['required'] = True
     parameter_obj['in'] = param_type
     parameter_obj['name'] = input_parameter_obj.name
     parameter_obj['description'] = input_parameter_obj.documentation
-    # $ref should be encapsulated in 'schema' instead of parameter.
+    # $ref should be encapsulated in 'schema' instead of parameter. -> this throws swagger validation error
+    # hence another method is to to get data in $ref in parameter_obj itself
     if '$ref' in parameter_obj:
-        schema_obj = {'$ref': parameter_obj['$ref']}
-        parameter_obj['schema'] = schema_obj
+        type_obj = type_dict[parameter_obj['$ref'][len("#/definitions/"):]]
+        description = parameter_obj['description']
+        if 'description' in type_obj:
+            description = ""
+            description = "{ 1. " + type_obj['description'] + " }, { 2. " + parameter_obj['description'] + " }"
+        parameter_obj.update(type_obj)
+        parameter_obj['description'] = description
         del parameter_obj['$ref']
     return parameter_obj
-
-
-def find_output_schema(output, type_dict, structure_svc, enum_svc):
-    schema = {}
-    visit_type_category(output.type, schema, type_dict, structure_svc, enum_svc)
-    return schema
-
 
 def get_response_object_name(service_id, operation_id):
     if operation_id == 'get':
@@ -411,9 +444,13 @@ def get_response_object_name(service_id, operation_id):
 
 
 def populate_response_map(output, errors, error_map, type_dict, structure_svc, enum_svc, service_id, operation_id, endpoint):
+
     response_map = {}
+    schema = {}
     success_response = {'description': output.documentation}
-    schema = find_output_schema(output, type_dict, structure_svc, enum_svc)
+
+    tpHandler = typeHandler(endpoint)
+    tpHandler.visit_type_category(output.type, schema, type_dict, structure_svc, enum_svc)
     # if type of schema is void, don't include it.
     # this prevents showing response as void in swagger-ui
     if schema is not None:
@@ -426,10 +463,7 @@ def populate_response_map(output, errors, error_map, type_dict, structure_svc, e
                     'required': ['value']
                 }
             elif endpoint == "api":
-                resp = {
-                    'type': 'object',
-                    'properties': schema 
-                }
+                resp = schema
             else:
                 print("Endpoint at populate_response_map is unknown : ", endpoint)
             type_name = get_response_object_name(service_id, operation_id) + '_result'
@@ -441,7 +475,7 @@ def populate_response_map(output, errors, error_map, type_dict, structure_svc, e
     response_map[requests.codes.ok] = success_response
     for error in errors:
         status_code = error_map.get(error.structure_id, http_client.INTERNAL_SERVER_ERROR)
-        check_type('com.vmware.vapi.structure', error.structure_id, type_dict, structure_svc, enum_svc)
+        tpHandler.check_type('com.vmware.vapi.structure', error.structure_id, type_dict, structure_svc, enum_svc)
         schema_obj = {'type': 'object', 'properties': {'type': {'type': 'string'},
                                                        'value': {'$ref': '#/definitions/' + error.structure_id}}}
         type_dict[error.structure_id + '_error'] = schema_obj
@@ -557,12 +591,18 @@ def convert_path_list_to_path_map(path_list):
 
 def cleanup(path_dict, type_dict):
     for _, type_object in six.iteritems(type_dict):
-        if 'properties' in type_object:
-            properties = type_object['properties']
-            for key, property_value in six.iteritems(properties):
-                if key == "value":
+        if 'properties' in type_object or 'additionalProperties' in type_object:
+
+            if 'properties' in type_object:
+                properties = type_object['properties']
+            else:
+                properties = type_object['additionalProperties']
+
+            for key, property_value in properties.items():
+                if isinstance(property_value, dict):
                     if 'required' in property_value and isinstance(property_value['required'], bool):
                         del property_value['required']
+                        
     for _, path_value in six.iteritems(path_dict):
         for _, method_value in six.iteritems(path_value):
             if 'path' in method_value:
@@ -843,7 +883,7 @@ def is_param_path_variable(param, path_param_placeholder):
     return param.metadata['PathVariable'].elements['value'].string_value == path_param_placeholder
 
 
-def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_svc):
+def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_svc, endpoint):
     """
     Flattens query parameters specs.
     1. Create a query parameter for every field in spec.
@@ -879,7 +919,8 @@ def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_sv
     """
     prop_array = []
     parameter_obj = {}
-    visit_type_category(query_param_info.type, parameter_obj, type_dict, structure_svc, enum_svc)
+    tpHandler = typeHandler(endpoint)
+    tpHandler.visit_type_category(query_param_info.type, parameter_obj, type_dict, structure_svc, enum_svc)
     if '$ref' in parameter_obj:
         reference = parameter_obj['$ref'].replace('#/definitions/', '')
         type_ref = type_dict.get(reference, None)
@@ -936,18 +977,18 @@ def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_sv
     return prop_array
 
 
-def process_get_request(url, params, type_dict, structure_svc, enum_svc):
+def process_get_request(url, params, type_dict, structure_svc, enum_svc, endpoint):
     param_array = []
     path_param_list, query_param_list, new_url = extract_path_parameters(params, url)
     for field_info in path_param_list:
         parameter_obj = convert_field_info_to_swagger_parameter('path', field_info,
-                                                                type_dict, structure_svc, enum_svc)
+                                                                type_dict, structure_svc, enum_svc, endpoint)
         param_array.append(parameter_obj)
     # process query parameters
     for field_info in query_param_list:
         # See documentation of method flatten_query_param_spec to understand
         # handling of all the query parameters; filter as well as non filter
-            flattened_params = flatten_query_param_spec(field_info, type_dict, structure_svc, enum_svc)
+            flattened_params = flatten_query_param_spec(field_info, type_dict, structure_svc, enum_svc, endpoint)
             if flattened_params is not None:
                 param_array[1:1] = flattened_params
     return param_array, new_url
@@ -967,34 +1008,34 @@ def wrap_body_params(service_name, operation_name, body_param_list, type_dict, s
     # todo:
     # not unique enough. make it unique
     wrapper_name = service_name + '_' + operation_name
-    body_obj = {'type': 'object'}
+    body_obj = {}
     properties_obj = {}
-    body_obj['properties'] = properties_obj
+    if endpoint == "rest":
+        body_obj['type'] =  'object'
+        body_obj['properties'] = properties_obj
+    
     required = []
-    # name_array = []
+    tpHandler = typeHandler(endpoint)
     for param in body_param_list:
+        
+        parameter_obj = {}
+        tpHandler.visit_type_category(param.type, parameter_obj, type_dict, structure_svc, enum_svc)
+        parameter_obj['description'] = param.documentation
         if endpoint == "rest":
-            parameter_obj = {}
-            visit_type_category(param.type, parameter_obj, type_dict, structure_svc,
-                                enum_svc)
-            # name_array.append(param.name)
-            parameter_obj['description'] = param.documentation
             properties_obj[param.name] = parameter_obj
             if 'required' not in parameter_obj:
                 required.append(param.name)
-            else:
-                if parameter_obj['required'] == 'true':
-                    required.append(param.name)
+            elif parameter_obj['required'] == 'true':
+                required.append(param.name)
         elif endpoint == "api":
-            visit_type_category(param.type, properties_obj, type_dict, structure_svc, enum_svc)
-            properties_obj['description'] = param.documentation
-        else:
-            print("Endpoint at wrap_body_params is unknown : ", endpoint)
+            body_obj.update(parameter_obj)
 
     parameter_obj = {'in': 'body', 'name': 'request_body'}
     if len(required) > 0:
         body_obj['required'] = required
         parameter_obj['required'] = True
+    elif 'required' in body_obj:
+        del body_obj['required']
 
     type_dict[wrapper_name] = body_obj
 
@@ -1013,7 +1054,7 @@ def process_put_post_patch_request(url, service_name, operation_name, params,
     par_array = []
     for field_info in path_param_list:
         parx = convert_field_info_to_swagger_parameter('path', field_info, type_dict,
-                                                       structure_svc, enum_svc)
+                                                       structure_svc, enum_svc, endpoint)
         par_array.append(parx)
 
     if body_param_list:
@@ -1024,15 +1065,15 @@ def process_put_post_patch_request(url, service_name, operation_name, params,
     return par_array, new_url
 
 
-def process_delete_request(url, params, type_dict, structure_svc, enum_svc):
+def process_delete_request(url, params, type_dict, structure_svc, enum_svc, endpoint):
     path_param_list, other_params, new_url = extract_path_parameters(params, url)
     param_array = []
     for field_info in path_param_list:
         parx = convert_field_info_to_swagger_parameter('path', field_info, type_dict,
-                                                       structure_svc, enum_svc)
+                                                       structure_svc, enum_svc, endpoint)
         param_array.append(parx)
     for field_info in other_params:
-        parx = convert_field_info_to_swagger_parameter('query', field_info, type_dict, structure_svc, enum_svc)
+        parx = convert_field_info_to_swagger_parameter('query', field_info, type_dict, structure_svc, enum_svc, endpoint)
         param_array.append(parx)
     return param_array, new_url
 
@@ -1045,10 +1086,10 @@ def handle_request_mapping(url, method_type, service_name, operation_name, param
                                               enum_svc, endpoint)
     if method_type == 'get':
         return process_get_request(url, params_metadata, type_dict,
-                                   structure_svc, enum_svc)
+                                   structure_svc, enum_svc, endpoint)
     if method_type == 'delete':
         return process_delete_request(url, params_metadata, type_dict,
-                                      structure_svc, enum_svc)
+                                      structure_svc, enum_svc, endpoint)
 
 
 def find_url(list_of_links):
