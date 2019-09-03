@@ -286,9 +286,11 @@ class typeHandler():
                 elif self.endpoint == "api":
                     new_type['additionalProperties'] = temp_new_type
                 
-
-            new_prop['type'] = 'array'
-            new_prop['items'] = new_type
+            if self.endpoint == "rest":
+                new_prop['type'] = 'array'
+                new_prop['items'] = new_type
+            elif self.endpoint == "api":
+                new_prop.update(new_type)
 
             if 'additionalProperties' in new_type:
                 if not new_type['additionalProperties'].get('required', True):
@@ -466,21 +468,31 @@ def populate_response_map(output, errors, error_map, type_dict, structure_svc, e
                 resp = schema
             else:
                 print("Endpoint at populate_response_map is unknown : ", endpoint)
-            type_name = get_response_object_name(service_id, operation_id) + '_result'
-            if type_name not in type_dict:
-                type_dict[type_name] = resp
-            success_response['schema'] = {"$ref": "#/definitions/" + type_name}
+            
+            # type_name = get_response_object_name(service_id, operation_id) + '_result'
+            # if type_name not in type_dict:
+            #     type_dict[type_name] = resp
+            # success_response['schema'] = {"$ref": "#/definitions/" + type_name}
+
+            success_response['schema'] = resp
+
     # success response is not mapped through metamodel.
     # hardcode it for now.
     response_map[requests.codes.ok] = success_response
     for error in errors:
         status_code = error_map.get(error.structure_id, http_client.INTERNAL_SERVER_ERROR)
         tpHandler.check_type('com.vmware.vapi.structure', error.structure_id, type_dict, structure_svc, enum_svc)
-        schema_obj = {'type': 'object', 'properties': {'type': {'type': 'string'},
-                                                       'value': {'$ref': '#/definitions/' + error.structure_id}}}
-        type_dict[error.structure_id + '_error'] = schema_obj
-        response_obj = {'description': error.documentation, 'schema': {'$ref': '#/definitions/'
+        
+        if endpoint == "rest":
+            schema_obj = {'type': 'object', 'properties': {'type': {'type': 'string'},
+                                                        'value': {'$ref': '#/definitions/' + error.structure_id}}}
+            type_dict[error.structure_id + '_error'] = schema_obj
+            response_obj = {'description': error.documentation, 'schema': {'$ref': '#/definitions/'
                                                                                + error.structure_id + '_error'}}
+        elif endpoint == "api":
+            response_obj = {'description': error.documentation, 'schema': {'$ref': '#/definitions/'
+                                                                               + error.structure_id}}
+
         response_map[status_code] = response_obj
     return response_map
 
