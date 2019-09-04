@@ -801,16 +801,20 @@ def remove_query_params(path_dict):
         if '?' in old_path:
             paths_array = re.split('\?', old_path)
             new_path = paths_array[0]
-            query_parameters = paths_array[1]
-            key_value = query_parameters.split('=')
-            q_param = {'name': key_value[0], 'in': 'query', 'description': key_value[0] + '=' + key_value[1],
-                       'required': True, 'type': 'string', 'enum': [key_value[1]]}
+
+            query_param = []
+            for query_parameter in paths_array[1].split('&'):
+                key_value = query_parameter.split('=')
+                q_param = {'name': key_value[0], 'in': 'query', 'description': key_value[0] + '=' + key_value[1],
+                        'required': True, 'type': 'string', 'enum': [key_value[1]]}
+                query_param.append(q_param)
+
             if new_path in path_dict:
                 new_path_operations = path_dict[new_path].keys()
                 path_operations = http_operations.keys()
                 if len(set(path_operations).intersection(new_path_operations)) < 1:
                     for http_method, operation_dict in http_operations.items():
-                        operation_dict['parameters'].append(q_param)
+                        operation_dict['parameters'] = operation_dict['parameters'] + query_param
                     path_dict[new_path] = merge_dictionaries(http_operations, path_dict[new_path])
                     paths_to_delete.append(old_path)
             else:
@@ -854,6 +858,25 @@ def find_consumes(method_type):
         return None
     return ['application/json']
 
+def extract_body_parameters(params):
+    body_params = []
+    other_params = []
+    for param in params:
+        if 'Body' in param.metadata:
+            body_params.append(param)
+        else:
+            other_params.append(param)
+    return body_params, other_params
+
+def extract_query_parameters(params):
+    query_params = []
+    other_params = []
+    for param in params:
+        if 'Query' in param.metadata:
+            query_params.append(param)
+        else:
+            other_params.append(param)
+    return query_params, other_params
 
 def extract_path_parameters(params, url):
     """
@@ -996,18 +1019,28 @@ def flatten_query_param_spec(query_param_info, type_dict, structure_svc, enum_sv
 
 def process_get_request(url, params, type_dict, structure_svc, enum_svc, endpoint):
     param_array = []
-    path_param_list, query_param_list, new_url = extract_path_parameters(params, url)
+    path_param_list, other_params_list, new_url = extract_path_parameters(params, url)
+    
     for field_info in path_param_list:
         parameter_obj = convert_field_info_to_swagger_parameter('path', field_info,
                                                                 type_dict, structure_svc, enum_svc, endpoint)
         param_array.append(parameter_obj)
+
+    if endpoint == "api":
+        ## Query 
+        query_param_list, other_params_list = extract_query_parameters(other_params_list)
+        for query_param in query_param_list:
+            parameter_obj = convert_field_info_to_swagger_parameter('query', query_param,
+                                                                type_dict, structure_svc, enum_svc, endpoint)
+            param_array.append(parameter_obj)
+
     # process query parameters
-    for field_info in query_param_list:
+    for field_info in other_params_list:
         # See documentation of method flatten_query_param_spec to understand
         # handling of all the query parameters; filter as well as non filter
-            flattened_params = flatten_query_param_spec(field_info, type_dict, structure_svc, enum_svc, endpoint)
-            if flattened_params is not None:
-                param_array[1:1] = flattened_params
+        flattened_params = flatten_query_param_spec(field_info, type_dict, structure_svc, enum_svc, endpoint)
+        if flattened_params is not None:
+            param_array = param_array + flattened_params
     return param_array, new_url
 
 
@@ -1067,18 +1100,42 @@ def process_put_post_patch_request(url, service_name, operation_name, params,
     Handles http post/put/patch request.
     todo: handle query, formData and header parameters
     """
-    path_param_list, body_param_list, new_url = extract_path_parameters(params, url)
+    ## Path
+    path_param_list, other_param_list, new_url = extract_path_parameters(params, url)
     par_array = []
     for field_info in path_param_list:
         parx = convert_field_info_to_swagger_parameter('path', field_info, type_dict,
                                                        structure_svc, enum_svc, endpoint)
         par_array.append(parx)
 
+    if endpoint == "api":
+        ## Body
+        body_param_list, other_param_list =  extract_body_parameters(other_param_list)
+    else:
+        body_param_list = other_param_list
+
     if body_param_list:
         parx = wrap_body_params(service_name, operation_name, body_param_list, type_dict,
                                 structure_svc, enum_svc, endpoint)
         if parx is not None:
             par_array.append(parx)
+
+    if endpoint == "api":
+        ## Query 
+        query_param_list, other_param_list = extract_query_parameters(other_param_list)
+        for query_param in query_param_list:
+            parx = convert_field_info_to_swagger_parameter('query', query_param, type_dict,
+                                                        structure_svc, enum_svc, endpoint)
+            par_array.append(parx)
+
+        # process query parameters
+        for field_info in other_param_list:
+            # See documentation of method flatten_query_param_spec to understand
+            # handling of all the query parameters; filter as well as non filter
+            flattened_params = flatten_query_param_spec(field_info, type_dict, structure_svc, enum_svc, endpoint)
+            if flattened_params is not None:
+                par_array = par_array + flattened_params
+
     return par_array, new_url
 
 
